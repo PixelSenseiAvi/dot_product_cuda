@@ -1,12 +1,15 @@
-#include "book.h"
+#include <stdio.h>
+#include "cuda_runtime.h"
+#include "device_launch_parameters.h"
+#include "device_atomic_functions.h"
+#include <stdlib.h>
 
-#define imin(a,b) (a<b?a:b)
+const int N = 1<<24;
+const int threadsPerBlock = 512;
+const int blocksPerGrid = N/threadsPerBlock;
 
-const int N = 33 * 1024;
-const int threadsPerBlock = 256;
-const int blocksPerGrid = imin(32, (N+threadsPerBlock-1) / threadsPerBlock);
-
-__global__ void dot(float* a, float* b, float* c) {
+//kernel 1
+__global__ void partial_dot(float* a, float* b, float* c) {
 	__shared__ float cache[threadsPerBlock];
 	int tid = threadIdx.x + blockIdx.x * blockDim.x;
 	int cacheIndex = threadIdx.x;
@@ -38,45 +41,94 @@ __global__ void dot(float* a, float* b, float* c) {
 }
 
 
+__global__ void atomic_dot(float *a, float *b, float *c)
+{
+    __shared__ float cache[threadsPerBlock];
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    cache[threadIdx.x] = a[index] * b[index];
+
+    __syncthreads();
+
+    if (threadIdx.x == 0)
+    {
+        float sum = 0;
+        for (int i = 0; i < threadsPerBlock; i++)
+        {
+            sum += cache[i];
+        }
+        atomicAdd(c, sum);
+    }
+}
+
+
 int main (void) {
-	float *a, *b, c, *partial_c;
-	float *dev_a, *dev_b, *dev_partial_c;
+
+  cudaEvent_t start_k1, stop_k1, start_k2, stop_k2;
+  cudaEventCreate(&start_k1); cudaEventCreate(&start_k2);
+  cudaEventCreate(&stop_k1);  cudaEventCreate(&stop_k2);
+  float milliseconds_k1 = 0, milliseconds_k2 = 0;
+
+	float *a, *b, c, *t, *partial_c;
+	float *dev_a, *dev_b, *dev_t, *dev_partial_c;
 	
 	// allocate memory on the cpu side
 	a = (float*)malloc(N*sizeof(float));
 	b = (float*)malloc(N*sizeof(float));
+    t = (float *)malloc(sizeof(float));
 	partial_c = (float*)malloc(blocksPerGrid*sizeof(float));
 	
 	// allocate the memory on the gpu
-	HANDLE_ERROR(cudaMalloc((void**)&dev_a, N*sizeof(float)));
-	HANDLE_ERROR(cudaMalloc((void**)&dev_b, N*sizeof(float)));
-	HANDLE_ERROR(cudaMalloc((void**)&dev_partial_c, blocksPerGrid*sizeof(float)));
+	cudaMalloc((void**)&dev_a, N*sizeof(float));
+	cudaMalloc((void**)&dev_b, N*sizeof(float));
+    cudaMalloc((void **)&dev_t, sizeof(float));
+	cudaMalloc((void**)&dev_partial_c, blocksPerGrid*sizeof(float));
 	
+    float sumTest = 0;
 	// fill in the host mempory with data
 	for(int i=0; i<N; i++) {
-		a[i] = i;
-		b[i] = i*2;
+	    a[i] = static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
+        b[i] = static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
+        sumTest += a[i] * b[i];
 	}
+	printf("sumTest: %f\n",sumTest);
 	
-	
+    *t = 0;
+
 	// copy the arrays 'a' and 'b' to the gpu
-	HANDLE_ERROR(cudaMemcpy(dev_a, a, N*sizeof(float), cudaMemcpyHostToDevice));
-	HANDLE_ERROR(cudaMemcpy(dev_b, b, N*sizeof(float), cudaMemcpyHostToDevice));
-	
-	dot<<<blocksPerGrid, threadsPerBlock>>>(dev_a, dev_b, dev_partial_c);
+	cudaMemcpy(dev_a, a, N*sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(dev_b, b, N*sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(dev_t, t, sizeof(float), cudaMemcpyHostToDevice);
+
+    cudaEventRecord(start_k1);
+	partial_dot<<<blocksPerGrid, threadsPerBlock>>>(dev_a, dev_b, dev_partial_c);
 	
 	// copy the array 'c' back from the gpu to the cpu
-	HANDLE_ERROR(cudaMemcpy(partial_c,dev_partial_c, blocksPerGrid*sizeof(float), cudaMemcpyDeviceToHost));
+	cudaMemcpy(partial_c,dev_partial_c, blocksPerGrid*sizeof(float), cudaMemcpyDeviceToHost);
 	
 	// finish up on the cpu side
 	c = 0;
 	for(int i=0; i<blocksPerGrid; i++) {
 		c += partial_c[i];
+		//printf("parial_c: %.6f \n", partial_c[i]);
 	}
-	
+	cudaDeviceSynchronize();
+    cudaEventRecord(stop_k1);
+    cudaEventElapsedTime(&milliseconds_k1, start_k1, stop_k1);
+
 	#define sum_squares(x) (x*(x+1)*(2*x+1)/6)
-	printf("Does GPU value %.6g = %.6g?\n", c, 2*sum_squares((float)(N-1)));
+	printf("Kernel 1 value %f ", c);
+    printf("Time elapsed: %f \n", milliseconds_k1);
 	
+    cudaEventRecord(start_k2);
+    atomic_dot<<< blocksPerGrid, threadsPerBlock >>>(dev_a, dev_b, dev_t);
+    cudaDeviceSynchronize();
+    cudaEventRecord(stop_k2);
+    cudaEventElapsedTime(&milliseconds_k2, start_k2, stop_k2);
+
+    cudaMemcpy(t, dev_t, sizeof(float), cudaMemcpyDeviceToHost);
+
+    printf("Kernel 2: value is %f, total time elapsed %f\n", *t, milliseconds_k2);
+
 	// free memory on the gpu side
 	cudaFree(dev_a);
 	cudaFree(dev_b);
