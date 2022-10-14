@@ -16,3 +16,12 @@ Problem Statement:
 
 3. Compare the time it takes for kernel 1 and kernel 2. (Use cudaEventRecord() for the timing.)
 
+# How to run
+1. Check for the nvcc compiler
+   nvcc --version
+   
+2. Compile the program
+   nvcc main.cu -o main
+  
+3. Run
+  ./main
