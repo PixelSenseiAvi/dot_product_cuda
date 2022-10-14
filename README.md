@@ -2,7 +2,9 @@
 CUDA Implementation of dot product
 
 The dot product of two vectors a = and b written a • b, is simply the sum of the component-by-component products:
+
 a •b = summation[ai x bi]
+
 
 Problem Statement:
 1. Write a CUDA code to compute in parallel the dot product of two random single precision floating-point vectors with size N = 1<<24;
