@@ -115,7 +115,7 @@ int main (void) {
     cudaEventRecord(stop_k1);
     cudaEventElapsedTime(&milliseconds_k1, start_k1, stop_k1);
 
-	#define sum_squares(x) (x*(x+1)*(2*x+1)/6)
+	//#define sum_squares(x) (x*(x+1)*(2*x+1)/6)
 	printf("Kernel 1 value %f ", c);
     printf("Time elapsed: %f \n", milliseconds_k1);
 	
